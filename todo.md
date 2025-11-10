@@ -35,8 +35,9 @@
 
 ## Deployment
 - [x] README with Render deployment instructions
-- [ ] Test on Render staging
-- [ ] Production deployment
+- [ ] Pousser code sur GitHub
+- [ ] Configurer base de données Render
+- [ ] Déployer Web Service sur Render
 
 ## Nouvelles fonctionnalités
 - [x] Générer pseudo aléatoire à la connexion
