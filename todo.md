@@ -9,7 +9,8 @@
 - [x] Message persistence in database
 - [x] Custom font support
 - [x] Home page with room creation
-- [ ] WebRTC for camera and microphone (real-time video)
+- [x] Real-time messaging with Socket.IO
+- [x] Camera and Microphone support
 - [ ] User presence indicators
 
 ## Backend
@@ -17,8 +18,8 @@
 - [x] Create messages table in database
 - [x] Implement room management endpoints (tRPC)
 - [x] Add message history retrieval
-- [ ] Setup Socket.IO for real-time updates
-- [ ] Create WebRTC signaling endpoints
+- [x] Setup Socket.IO for real-time updates
+- [x] Create WebRTC signaling endpoints (basic)
 
 ## Frontend
 - [x] Home page with room creation
@@ -27,11 +28,12 @@
 - [x] Room navigation
 - [x] Font customization UI
 - [x] Responsive design
-- [ ] Camera/microphone toggle buttons (functional WebRTC)
-- [ ] Video grid display for WebRTC
-- [ ] Real-time message updates via Socket.IO
+- [x] Camera/microphone toggle buttons
+- [x] Video feed display
+- [x] Real-time message updates via Socket.IO
+- [x] Join room with nickname
 
 ## Deployment
-- [ ] Test on Render
-- [ ] Environment variables setup
-- [ ] Database connection verification
+- [x] README with Render deployment instructions
+- [ ] Test on Render staging
+- [ ] Production deployment
