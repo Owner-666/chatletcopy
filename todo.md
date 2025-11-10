@@ -42,3 +42,4 @@
 - [x] Générer pseudo aléatoire à la connexion
 - [x] Permettre de changer le pseudo dans le salon
 - [x] Vérifier que le pseudo est unique dans le salon
+- [x] Partage vidéo P2P avec WebRTC entre utilisateurs

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { getSocket, disconnectSocket } from "@/lib/socket";
+import { WebRTCManager } from "@/lib/webrtc";
 import { generateRandomNickname } from "@shared/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +21,7 @@ interface Message {
 interface RemoteUser {
   id: string;
   nickname: string;
+  stream?: MediaStream;
 }
 
 export default function Chat() {
@@ -32,14 +34,16 @@ export default function Chat() {
   const [fontFamily, setFontFamily] = useState("sans-serif");
   const [cameraOn, setCameraOn] = useState(false);
   const [micOn, setMicOn] = useState(false);
-  const [remoteUsers, setRemoteUsers] = useState<RemoteUser[]>([]);
+  const [remoteUsers, setRemoteUsers] = useState<Map<string, RemoteUser>>(new Map());
   const [connected, setConnected] = useState(false);
   const [editingNickname, setEditingNickname] = useState(false);
   const [newNickname, setNewNickname] = useState("");
   const [usedNicknames, setUsedNicknames] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const socketRef = useRef(getSocket());
+  const webrtcRef = useRef<WebRTCManager | null>(null);
 
   const createRoomMutation = trpc.chat.getOrCreateRoom.useMutation();
 
@@ -64,7 +68,7 @@ export default function Chat() {
     initRoom();
   }, [room]);
 
-  // Setup Socket.IO
+  // Setup Socket.IO and WebRTC
   useEffect(() => {
     const socket = socketRef.current;
 
@@ -74,12 +78,16 @@ export default function Chat() {
       
       if (roomId && nickname) {
         socket.emit("join_room", { roomId, nickname });
+        
+        // Initialize WebRTC manager
+        if (!webrtcRef.current && roomId) {
+          webrtcRef.current = new WebRTCManager(socket, socket.id || "", roomId);
+        }
       }
     });
 
     socket.on("message_history", (msgs: Message[]) => {
       setMessages(msgs);
-      // Extract used nicknames from messages
       const nicks = new Set(msgs.map(m => m.nickname).filter(n => n !== "System"));
       setUsedNicknames(nicks);
     });
@@ -88,8 +96,22 @@ export default function Chat() {
       setMessages((prev) => [...prev, msg]);
     });
 
-    socket.on("user_joined", (data: { nickname: string; timestamp: Date }) => {
+    socket.on("user_joined", (data: { nickname: string; timestamp: Date; userId?: string }) => {
       setUsedNicknames((prev) => new Set([...Array.from(prev), data.nickname]));
+      if (data.userId) {
+        const userId = data.userId as string;
+        setRemoteUsers((prev) => {
+          const updated = new Map(Array.from(prev));
+          updated.set(userId, { id: userId, nickname: data.nickname });
+          return updated;
+        });
+        
+        // Create peer connection for new user
+        if (webrtcRef.current) {
+          webrtcRef.current.createPeerConnection(userId, data.nickname, true);
+        }
+      }
+      
       setMessages((prev) => [
         ...prev,
         {
@@ -101,12 +123,19 @@ export default function Chat() {
       ]);
     });
 
-    socket.on("user_left", (data: { nickname: string; timestamp: Date }) => {
+    socket.on("user_left", (data: { nickname: string; timestamp: Date; userId?: string }) => {
       setUsedNicknames((prev) => {
         const updated = new Set(Array.from(prev));
         updated.delete(data.nickname);
         return updated;
       });
+      if (data.userId) {
+        setRemoteUsers((prev) => {
+          const updated = new Map(Array.from(prev));
+          updated.delete(data.userId as string);
+          return updated;
+        });
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -152,24 +181,25 @@ export default function Chat() {
     };
   }, [roomId, nickname]);
 
-  // Auto-scroll to bottom
+  // Handle camera and microphone
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  // Handle camera
-  useEffect(() => {
-    if (cameraOn) {
+    if (cameraOn || micOn) {
       navigator.mediaDevices
-        .getUserMedia({ video: true, audio: micOn })
+        .getUserMedia({ video: cameraOn, audio: micOn })
         .then((stream) => {
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
           }
+          
+          // Share stream with WebRTC peers
+          if (webrtcRef.current) {
+            webrtcRef.current.setLocalStream(stream);
+          }
         })
         .catch((error) => {
-          console.error("Error accessing camera:", error);
+          console.error("Error accessing media:", error);
           setCameraOn(false);
+          setMicOn(false);
         });
     } else {
       if (videoRef.current && videoRef.current.srcObject) {
@@ -177,8 +207,44 @@ export default function Chat() {
         tracks.forEach((track) => track.stop());
         videoRef.current.srcObject = null;
       }
+      
+      if (webrtcRef.current) {
+        webrtcRef.current.clearLocalStream();
+      }
     }
   }, [cameraOn, micOn]);
+
+  // Monitor WebRTC streams
+  useEffect(() => {
+    if (!webrtcRef.current) return;
+    
+    const interval = setInterval(() => {
+      const connections = webrtcRef.current?.getAllPeerConnections() || [];
+      
+      setRemoteUsers((prev) => {
+        const updated = new Map(Array.from(prev));
+        
+        for (const connection of connections) {
+          if (connection.stream) {
+            const user = updated.get(connection.peerId);
+            if (user) {
+              user.stream = connection.stream;
+              updated.set(connection.peerId, user);
+            }
+          }
+        }
+        
+        return updated;
+      });
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, []);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -385,8 +451,9 @@ export default function Chat() {
           </Card>
         </div>
 
-        {/* Media Controls */}
+        {/* Media Controls and Videos */}
         <div className="flex flex-col gap-4">
+          {/* Media Controls */}
           <Card className="bg-slate-800 border-slate-700 p-4">
             <h3 className="text-white font-semibold mb-4">Media</h3>
             <div className="space-y-2">
@@ -409,6 +476,7 @@ export default function Chat() {
             </div>
           </Card>
 
+          {/* Your Video */}
           <Card className="bg-slate-800 border-slate-700 p-4">
             <h3 className="text-white font-semibold mb-2">Your Video</h3>
             <div className="bg-slate-900 rounded aspect-video flex items-center justify-center overflow-hidden">
@@ -426,16 +494,36 @@ export default function Chat() {
             </div>
           </Card>
 
-          {remoteUsers.length > 0 && (
+          {/* Remote Videos */}
+          {remoteUsers.size > 0 && (
             <Card className="bg-slate-800 border-slate-700 p-4">
-              <h3 className="text-white font-semibold mb-2">Users ({remoteUsers.length})</h3>
-              <div className="space-y-2">
-                {remoteUsers.map((user) => (
-                  <div
-                    key={user.id}
-                    className="bg-slate-700 rounded p-2 text-sm text-slate-300"
-                  >
-                    {user.nickname}
+              <h3 className="text-white font-semibold mb-2">
+                Users ({remoteUsers.size})
+              </h3>
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {Array.from(remoteUsers.values()).map((user) => (
+                  <div key={user.id} className="space-y-1">
+                    <p className="text-sm text-slate-300">{user.nickname}</p>
+                    <div className="bg-slate-900 rounded aspect-video flex items-center justify-center overflow-hidden">
+                      {user.stream ? (
+                        <video
+                          ref={(el) => {
+                            if (el) remoteVideoRefs.current.set(user.id, el);
+                          }}
+                          autoPlay
+                          playsInline
+                          className="w-full h-full object-cover"
+                          onLoadedMetadata={(e) => {
+                            const video = e.currentTarget;
+                            if (user.stream) {
+                              video.srcObject = user.stream;
+                            }
+                          }}
+                        />
+                      ) : (
+                        <span className="text-slate-500 text-xs">No video</span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
