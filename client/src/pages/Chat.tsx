@@ -2,10 +2,11 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, Link } from "wouter";
 import { trpc } from "@/lib/trpc";
 import { getSocket, disconnectSocket } from "@/lib/socket";
+import { generateRandomNickname } from "@shared/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
-import { Send, Video, Mic, Home, Phone, PhoneOff } from "lucide-react";
+import { Send, Video, Mic, Home, Edit2, Check, X } from "lucide-react";
 
 interface Message {
   id?: number;
@@ -24,6 +25,7 @@ interface RemoteUser {
 export default function Chat() {
   const { room } = useParams<{ room: string }>();
   const [nickname, setNickname] = useState("");
+  const [displayNickname, setDisplayNickname] = useState("");
   const [message, setMessage] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [roomId, setRoomId] = useState<number | null>(null);
@@ -32,13 +34,16 @@ export default function Chat() {
   const [micOn, setMicOn] = useState(false);
   const [remoteUsers, setRemoteUsers] = useState<RemoteUser[]>([]);
   const [connected, setConnected] = useState(false);
+  const [editingNickname, setEditingNickname] = useState(false);
+  const [newNickname, setNewNickname] = useState("");
+  const [usedNicknames, setUsedNicknames] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const socketRef = useRef(getSocket());
 
   const createRoomMutation = trpc.chat.getOrCreateRoom.useMutation();
 
-  // Initialize room
+  // Initialize room and generate random nickname
   useEffect(() => {
     if (!room) return;
     
@@ -46,6 +51,11 @@ export default function Chat() {
       try {
         const result = await createRoomMutation.mutateAsync({ slug: room });
         setRoomId(result.id);
+        
+        // Generate random nickname
+        const randomNick = generateRandomNickname();
+        setNickname(randomNick);
+        setDisplayNickname(randomNick);
       } catch (error) {
         console.error("Failed to create/get room:", error);
       }
@@ -69,6 +79,9 @@ export default function Chat() {
 
     socket.on("message_history", (msgs: Message[]) => {
       setMessages(msgs);
+      // Extract used nicknames from messages
+      const nicks = new Set(msgs.map(m => m.nickname).filter(n => n !== "System"));
+      setUsedNicknames(nicks);
     });
 
     socket.on("new_message", (msg: Message) => {
@@ -76,6 +89,7 @@ export default function Chat() {
     });
 
     socket.on("user_joined", (data: { nickname: string; timestamp: Date }) => {
+      setUsedNicknames((prev) => new Set([...Array.from(prev), data.nickname]));
       setMessages((prev) => [
         ...prev,
         {
@@ -88,6 +102,11 @@ export default function Chat() {
     });
 
     socket.on("user_left", (data: { nickname: string; timestamp: Date }) => {
+      setUsedNicknames((prev) => {
+        const updated = new Set(Array.from(prev));
+        updated.delete(data.nickname);
+        return updated;
+      });
       setMessages((prev) => [
         ...prev,
         {
@@ -97,6 +116,24 @@ export default function Chat() {
           createdAt: new Date(data.timestamp),
         },
       ]);
+    });
+
+    socket.on("nickname_changed", (data: { oldNickname: string; newNickname: string }) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          nickname: "System",
+          content: `${data.oldNickname} changed nickname to ${data.newNickname}`,
+          fontFamily: null,
+          createdAt: new Date(),
+        },
+      ]);
+      setUsedNicknames((prev) => {
+        const updated = new Set(Array.from(prev));
+        updated.delete(data.oldNickname);
+        updated.add(data.newNickname);
+        return updated;
+      });
     });
 
     socket.on("disconnect", () => {
@@ -110,6 +147,7 @@ export default function Chat() {
       socket.off("new_message");
       socket.off("user_joined");
       socket.off("user_left");
+      socket.off("nickname_changed");
       socket.off("disconnect");
     };
   }, [roomId, nickname]);
@@ -145,12 +183,12 @@ export default function Chat() {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!roomId || !nickname.trim() || !message.trim()) return;
+    if (!roomId || !displayNickname.trim() || !message.trim()) return;
 
     const socket = socketRef.current;
     socket.emit("send_message", {
       roomId,
-      nickname: nickname.trim(),
+      nickname: displayNickname.trim(),
       content: message.trim(),
       fontFamily,
     });
@@ -158,36 +196,44 @@ export default function Chat() {
     setMessage("");
   };
 
+  const handleChangeNickname = () => {
+    if (!newNickname.trim()) {
+      setEditingNickname(false);
+      return;
+    }
+
+    if (usedNicknames.has(newNickname.trim())) {
+      alert("This nickname is already taken in this room!");
+      return;
+    }
+
+    const oldNickname = displayNickname;
+    const socket = socketRef.current;
+    
+    socket.emit("change_nickname", {
+      roomId,
+      oldNickname,
+      newNickname: newNickname.trim(),
+    });
+
+    setNickname(newNickname.trim());
+    setDisplayNickname(newNickname.trim());
+    setNewNickname("");
+    setEditingNickname(false);
+  };
+
   const handleJoinRoom = () => {
     if (!nickname.trim() || !roomId) return;
     
     const socket = socketRef.current;
-    socket.emit("join_room", { roomId, nickname: nickname.trim() });
+    socket.emit("join_room", { roomId, nickname });
   };
 
   if (!nickname) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center">
         <Card className="bg-slate-800 border-slate-700 p-8 w-full max-w-md">
-          <h1 className="text-2xl font-bold text-white mb-6">Enter /{room}</h1>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleJoinRoom();
-            }}
-            className="space-y-4"
-          >
-            <Input
-              placeholder="Your nickname"
-              value={nickname}
-              onChange={(e) => setNickname(e.target.value)}
-              autoFocus
-              className="bg-slate-700 border-slate-600 text-white placeholder:text-slate-400"
-            />
-            <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700">
-              Join Room
-            </Button>
-          </form>
+          <h1 className="text-2xl font-bold text-white mb-6">Loading...</h1>
         </Card>
       </div>
     );
@@ -208,7 +254,54 @@ export default function Chat() {
               {connected ? "● Connected" : "● Disconnected"}
             </span>
           </div>
-          <span className="text-slate-300">{nickname}</span>
+          
+          {/* Nickname Display and Edit */}
+          <div className="flex items-center gap-2">
+            {editingNickname ? (
+              <>
+                <Input
+                  value={newNickname}
+                  onChange={(e) => setNewNickname(e.target.value)}
+                  placeholder="New nickname"
+                  className="bg-slate-700 border-slate-600 text-white placeholder:text-slate-400 w-40"
+                  autoFocus
+                />
+                <Button
+                  size="sm"
+                  onClick={handleChangeNickname}
+                  className="bg-green-600 hover:bg-green-700"
+                >
+                  <Check className="w-4 h-4" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setEditingNickname(false);
+                    setNewNickname("");
+                  }}
+                  className="text-slate-300"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
+              </>
+            ) : (
+              <>
+                <span className="text-slate-300">{displayNickname}</span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setEditingNickname(true);
+                    setNewNickname(displayNickname);
+                  }}
+                  className="text-slate-300 hover:text-white"
+                >
+                  <Edit2 className="w-4 h-4" />
+                </Button>
+              </>
+            )}
+          </div>
         </div>
       </div>
 

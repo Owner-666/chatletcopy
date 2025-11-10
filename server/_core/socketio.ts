@@ -92,6 +92,20 @@ export function setupSocketIO(httpServer: HTTPServer) {
       });
     });
 
+    // Change nickname
+    socket.on("change_nickname", (data: { roomId: number; oldNickname: string; newNickname: string }) => {
+      const user = users.get(socket.id);
+      if (user) {
+        user.nickname = data.newNickname;
+        users.set(socket.id, user);
+        
+        io.to(`room_${data.roomId}`).emit("nickname_changed", {
+          oldNickname: data.oldNickname,
+          newNickname: data.newNickname,
+        });
+      }
+    });
+
     // Disconnect
     socket.on("disconnect", () => {
       const user = users.get(socket.id);

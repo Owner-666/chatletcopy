@@ -37,3 +37,8 @@
 - [x] README with Render deployment instructions
 - [ ] Test on Render staging
 - [ ] Production deployment
+
+## Nouvelles fonctionnalités
+- [x] Générer pseudo aléatoire à la connexion
+- [x] Permettre de changer le pseudo dans le salon
+- [x] Vérifier que le pseudo est unique dans le salon
