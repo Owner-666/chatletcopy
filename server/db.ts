@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { InsertUser, users } from "../drizzle/schema";
+import { InsertUser, users, rooms, messages } from "../drizzle/schema";
 import { ENV } from './_core/env';
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -89,4 +89,29 @@ export async function getUserByOpenId(openId: string) {
   return result.length > 0 ? result[0] : undefined;
 }
 
-// TODO: add feature queries here as your schema grows.
+export async function getOrCreateRoom(slug: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  
+  const existing = await db.select().from(rooms).where(eq(rooms.slug, slug)).limit(1);
+  
+  if (existing.length > 0) return existing[0];
+  
+  await db.insert(rooms).values({ slug });
+  const created = await db.select().from(rooms).where(eq(rooms.slug, slug)).limit(1);
+  return created[0];
+}
+
+export async function getMessages(roomId: number, limit: number = 50) {
+  const db = await getDb();
+  if (!db) return [];
+  
+  return await db.select().from(messages).where(eq(messages.roomId, roomId)).orderBy(desc(messages.createdAt)).limit(limit);
+}
+
+export async function addMessage(roomId: number, nickname: string, content: string, fontFamily?: string) {
+  const db = await getDb();
+  if (!db) throw new Error("Database not available");
+  
+  return await db.insert(messages).values({ roomId, nickname, content, fontFamily });
+}

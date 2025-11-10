@@ -2,9 +2,10 @@ import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
+import { z } from "zod";
+import { getOrCreateRoom, getMessages, addMessage } from "./db";
 
 export const appRouter = router({
-    // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
@@ -17,12 +18,30 @@ export const appRouter = router({
     }),
   }),
 
-  // TODO: add feature routers here, e.g.
-  // todo: router({
-  //   list: protectedProcedure.query(({ ctx }) =>
-  //     db.getUserTodos(ctx.user.id)
-  //   ),
-  // }),
+  chat: router({
+    getOrCreateRoom: publicProcedure
+      .input(z.object({ slug: z.string().min(1).max(100) }))
+      .mutation(async ({ input }) => {
+        return await getOrCreateRoom(input.slug);
+      }),
+    
+    getMessages: publicProcedure
+      .input(z.object({ roomId: z.number(), limit: z.number().default(50) }))
+      .query(async ({ input }) => {
+        return await getMessages(input.roomId, input.limit);
+      }),
+    
+    sendMessage: publicProcedure
+      .input(z.object({
+        roomId: z.number(),
+        nickname: z.string().min(1).max(100),
+        content: z.string().min(1),
+        fontFamily: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        return await addMessage(input.roomId, input.nickname, input.content, input.fontFamily);
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;
